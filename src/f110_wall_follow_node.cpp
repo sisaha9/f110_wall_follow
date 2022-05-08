@@ -39,20 +39,16 @@ public:
         this->declare_parameter<int>("smoothing_filter_size");
         smoothing_filter_size_ = this->get_parameter("smoothing_filter_size").as_double();
 
-        auto lidar_sub1 = this->create_subscription<sensor_msgs::msg::LaserScan>(
+        lidar_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "scan",
             rclcpp::SensorDataQoS(),
             std::bind(&WallFollow::scan_callback, this, std::placeholders::_1)
         );
 
-        lidar_sub_ = lidar_sub1;
-
-        auto drive_pub1 = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
+        drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
             "nav",
             rclcpp::SensorDataQoS()
         );
-
-        drive_pub_ = drive_pub1;
     }
 
     std::vector<double> preprocess_scan(sensor_msgs::msg::LaserScan::SharedPtr &scan_msg)
@@ -150,7 +146,7 @@ public:
     }
 
     /// Scan Callback Function
-    void scan_callback(sensor_msgs::msg::LaserScan::SharedPtr &scan_msg)
+    void scan_callback(sensor_msgs::msg::LaserScan::SharedPtr scan_msg)
     {
         const auto filtered_ranges = preprocess_scan(scan_msg);
         get_error(filtered_ranges, scan_msg->angle_increment);

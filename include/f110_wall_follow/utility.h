@@ -29,7 +29,7 @@ std::vector<double> apply_smoothing_filter(const std::vector<double>& input_vect
 }
 
 /// Returns Indices of Start and End of the Lidar Scan for the input truncation angle converage
-std::vector<double > truncate(sensor_msgs::msg::LaserScan::SharedPtr &scan_msg,
+std::vector<double > truncate(const sensor_msgs::msg::LaserScan::ConstSharedPtr &scan_msg,
                                                           const double truncation_angle_coverage)
 {
     const auto truncated_range_size = static_cast<size_t >(

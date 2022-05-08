@@ -37,7 +37,7 @@ public:
         this->declare_parameter<double>("truncated_coverage_angle");
         truncated_coverage_angle_ = this->get_parameter("truncated_coverage_angle").as_double();
         this->declare_parameter<int>("smoothing_filter_size");
-        smoothing_filter_size_ = this->get_parameter("smoothing_filter_size").as_double();
+        smoothing_filter_size_ = this->get_parameter("smoothing_filter_size").as_int();
 
         lidar_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "scan",
@@ -51,7 +51,7 @@ public:
         );
     }
 
-    std::vector<double> preprocess_scan(sensor_msgs::msg::LaserScan::SharedPtr &scan_msg)
+    std::vector<double> preprocess_scan(const sensor_msgs::msg::LaserScan::ConstSharedPtr &scan_msg)
     {
         auto truncated_ranges = wf::truncate(scan_msg, truncated_coverage_angle_);
         for(auto& range : truncated_ranges)
@@ -146,7 +146,7 @@ public:
     }
 
     /// Scan Callback Function
-    void scan_callback(sensor_msgs::msg::LaserScan::SharedPtr scan_msg)
+    void scan_callback(const sensor_msgs::msg::LaserScan::ConstSharedPtr scan_msg)
     {
         const auto filtered_ranges = preprocess_scan(scan_msg);
         get_error(filtered_ranges, scan_msg->angle_increment);

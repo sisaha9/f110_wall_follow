@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    # Lidar Scan Truncation Coverage Angle
+    # (Assumes symmetric coverage about the center)
+    truncated_coverage_angle : 3.0
+
+    # Ranges Smoothing Filter Size
+    # Dimension : 1 x (2*smoothing_filter_size-1)
+    smoothing_filter_size : 5
+
+    # Wall Follow PID controller gains
+    kp : 1.0
+    ki : 0.0
+    kd : 0.0001
+
+    # Wall Follow Parameters
+
+    # Desired Wall Follow distance in meters
+    desired_distance_right : 0.9
+    desired_distance_left : 0.55
+
+    # Look-ahead Distance
+    lookahead_distance : 0.5
+
+    # Car Length
+    car_length : 0.50
+
+    # Desired Car Velocity based on Error
+    low_error_velocity: 4.0
+    medium_error_velocity: 3.0
+    medium_error_threshold: 0.174
+    high_error_velocity: 2.0
+    high_error_threshold: 0.349

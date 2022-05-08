@@ -1,33 +1,61 @@
 #include "f110_wall_follow/utility.h"
 
-#include <ros/ros.h>
-#include <ackermann_msgs/AckermannDriveStamped.h>
-#include <sensor_msgs/LaserScan.h>
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 
-class WallFollow
+class WallFollow : public rclcpp::Node
 {
 public:
-    WallFollow():
-            node_handle_(ros::NodeHandle()),
-            lidar_sub_(node_handle_.subscribe("scan", 5, &WallFollow::scan_callback, this)),
-            drive_pub_(node_handle_.advertise<ackermann_msgs::AckermannDriveStamped>("nav", 5))
+    WallFollow(const rclcpp::NodeOptions & options):  rclcpp::Node("wall_follow_node", options)
     {
-        node_handle_.getParam("/kp", kp_);
-        node_handle_.getParam("/ki", ki_);
-        node_handle_.getParam("/kd", kd_);
+        this->declare_parameter<double>("kp");
+        kp_ = this->get_parameter("kp").as_double();
+        this->declare_parameter<double>("ki");
+        ki_ = this->get_parameter("ki").as_double();
+        this->declare_parameter<double>("kd");
+        kd_ = this->get_parameter("kd").as_double();
         prev_error_ = 0.0;
         error_ = 0.0;
         integral_ = 0.0;
-        node_handle_.getParam("/desired_distance_left", desired_left_wall_distance_);
-        node_handle_.getParam("/lookahead_distance", lookahead_distance_);
-        prev_reading_time_ = ros::Time::now().toNSec();
-        current_reading_time = ros::Time::now().toNSec();
-        node_handle_.getParam("/error_based_velocities", error_based_velocities_);
-        node_handle_.getParam("/truncated_coverage_angle", truncated_coverage_angle_);
-        node_handle_.getParam("/smoothing_filter_size", smoothing_filter_size_);
+        this->declare_parameter<double>("desired_distance_left");
+        desired_left_wall_distance_ = this->get_parameter("desired_distance_left").as_double();
+        this->declare_parameter<double>("lookahead_distance");
+        lookahead_distance_ = this->get_parameter("lookahead_distance").as_double();
+        prev_reading_time_ = now().seconds();
+        current_reading_time = now().seconds();
+        this->declare_parameter<double>("low_error_velocity");
+        error_based_velocities_["low"] = this->get_parameter("low_error_velocity").as_double();
+        this->declare_parameter<double>("medium_error_velocity");
+        this->declare_parameter<double>("medium_error_threshold");
+        error_based_velocities_["medium"] = this->get_parameter("medium_error_velocity").as_double();
+        error_based_thresholds_["medium"] = this->get_parameter("medium_error_threshold").as_double();
+        this->declare_parameter<double>("high_error_velocity");
+        this->declare_parameter<double>("high_error_threshold");
+        error_based_velocities_["high"] = this->get_parameter("high_error_velocity").as_double();
+        error_based_thresholds_["high"] = this->get_parameter("high_error_threshold").as_double();
+        this->declare_parameter<double>("truncated_coverage_angle");
+        truncated_coverage_angle_ = this->get_parameter("truncated_coverage_angle").as_double();
+        this->declare_parameter<int>("smoothing_filter_size");
+        smoothing_filter_size_ = this->get_parameter("smoothing_filter_size").as_double();
+
+        auto lidar_sub1 = this->create_subscription<sensor_msgs::msg::LaserScan>(
+            "scan",
+            rclcpp::SensorDataQoS(),
+            std::bind(&WallFollow::scan_callback, this, std::placeholders::_1)
+        );
+
+        lidar_sub_ = lidar_sub1;
+
+        auto drive_pub1 = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>(
+            "nav",
+            rclcpp::SensorDataQoS()
+        );
+
+        drive_pub_ = drive_pub1;
     }
 
-    std::vector<double> preprocess_scan(const sensor_msgs::LaserScan::ConstPtr &scan_msg)
+    std::vector<double> preprocess_scan(sensor_msgs::msg::LaserScan::SharedPtr &scan_msg)
     {
         auto truncated_ranges = wf::truncate(scan_msg, truncated_coverage_angle_);
         for(auto& range : truncated_ranges)
@@ -41,19 +69,16 @@ public:
     }
 
     /// Returns the distance from obstacle at a given angle from the Laser Scan Message
-    /// @param scan_msg - Laser Scan Message
-    /// @param angle - Angle in Radians (0 rads -> right in front of the Car)
-    /// @return
     double get_range_at_angle(const std::vector<double> &filtered_scan, const double& angle,
             const double angle_increment) const
     {
         const double corrected_angle = angle + (truncated_coverage_angle_/2);
-        ROS_DEBUG("Corrected Angle : %f", corrected_angle);
+        RCLCPP_INFO(this->get_logger(), "Corrected Angle : %f", corrected_angle);
 
         const double required_range_index = static_cast<int>(floor(corrected_angle/angle_increment));
-        ROS_DEBUG("Required Range Index : %f", required_range_index);
+        RCLCPP_INFO(this->get_logger(), "Required Range Index : %f", required_range_index);
 
-        ROS_DEBUG("Required Range Value : %f", filtered_scan[required_range_index]);
+        RCLCPP_INFO(this->get_logger(), "Required Range Value : %f", filtered_scan[required_range_index]);
         return filtered_scan[required_range_index];
     }
 
@@ -61,22 +86,21 @@ public:
     void control_steering()
     {
         prev_reading_time_ = current_reading_time;
-        current_reading_time = ros::Time::now().toSec();
+        current_reading_time = now().seconds();
         const auto dt = current_reading_time - prev_reading_time_;
 
         integral_ += error_;
 
         double steering_angle = kp_ * error_ + kd_ * (error_ - prev_error_) / dt + ki_ * (integral_);
 
-        ackermann_msgs::AckermannDriveStamped drive_msg;
-        drive_msg.header.stamp = ros::Time::now();
+        ackermann_msgs::msg::AckermannDriveStamped drive_msg;
+        drive_msg.header.stamp = now();
         drive_msg.header.frame_id = "laser";
 
         if(std::isnan(steering_angle))
         {
             drive_msg.drive.speed = 0;
             drive_msg.drive.steering_angle = 0;
-            std::__throw_runtime_error("The Control Value to Steering cannot be nan");
         }
 
         // Thresholding for limiting the movement of car wheels to avoid servo locking
@@ -89,14 +113,14 @@ public:
             steering_angle = -0.4;
         }
 
-        ROS_DEBUG("Steering Angle : %f", steering_angle);
+        RCLCPP_INFO(this->get_logger(), "Steering Angle : %f", steering_angle);
         drive_msg.drive.steering_angle = steering_angle;
 
-        if(abs(steering_angle) > 0.349)
+        if(abs(steering_angle) > error_based_thresholds_["high"])
         {
             drive_msg.drive.speed = error_based_velocities_["high"];
         }
-        else if(abs(steering_angle) > 0.174)
+        else if(abs(steering_angle) > error_based_thresholds_["medium"])
         {
             drive_msg.drive.speed = error_based_velocities_["medium"];
         }
@@ -104,15 +128,12 @@ public:
         {
             drive_msg.drive.speed = error_based_velocities_["low"];
         }
-        drive_pub_.publish(drive_msg);
+        drive_pub_->publish(drive_msg);
 
         prev_error_ = error_;
     }
 
     /// Returns value of Error between the required distance and the current distance
-    /// @param scan_msg
-    /// @param left_distance
-    /// @return
     void get_error(const std::vector<double> &filtered_ranges, const double angle_increment)
     {
         const auto distance_of_a = get_range_at_angle(filtered_ranges, 0.5, angle_increment);
@@ -120,7 +141,7 @@ public:
         constexpr auto theta = 0.9;
 
         const auto alpha = std::atan2(distance_of_a*cos(theta)-distance_of_b,distance_of_a*sin(theta));
-        ROS_DEBUG("alpha: %f", alpha);
+        RCLCPP_INFO(this->get_logger(), "alpha: %f", alpha);
 
         const auto distance_t = distance_of_b*cos(alpha);
         const auto distance_tplus1 = distance_t + lookahead_distance_*sin(alpha);
@@ -129,8 +150,7 @@ public:
     }
 
     /// Scan Callback Function
-    /// @param scan_msg
-    void scan_callback(const sensor_msgs::LaserScan::ConstPtr &scan_msg)
+    void scan_callback(sensor_msgs::msg::LaserScan::SharedPtr &scan_msg)
     {
         const auto filtered_ranges = preprocess_scan(scan_msg);
         get_error(filtered_ranges, scan_msg->angle_increment);
@@ -138,9 +158,8 @@ public:
     }
 
 private:
-    ros::NodeHandle node_handle_;
-    ros::Subscriber lidar_sub_;
-    ros::Publisher drive_pub_;
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr lidar_sub_;
+    rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
 
     double kp_, ki_, kd_;
     double prev_error_, error_;
@@ -155,12 +174,15 @@ private:
 
     int smoothing_filter_size_;
     std::map<std::string, double> error_based_velocities_;
+    std::map<std::string, double> error_based_thresholds_;
 };
 
-int main(int argc, char ** argv)
+int main(int argc, char * argv[])
 {
-    ros::init(argc, argv, "wall_follow_node");
-    WallFollow wall_follower;
-    ros::spin();
+    rclcpp::init(argc, argv);
+    rclcpp::NodeOptions options{};
+    auto node = std::make_shared<WallFollow>(options);
+    rclcpp::spin(node);
+    rclcpp::shutdown();
     return 0;
 }
